@@ -1328,7 +1328,7 @@ splash.destroy()
 # 6. หน้าตาโปรแกรมหลัก (Cyberpunk Rounded Edition)
 # ----------------------------------------------------
 root = tk.Tk()
-root.title("🏎️ ECU REMAP TUNING PERFORMANCE SYSTEM")
+root.title("🏎️ ECU REMAP TUNING PERFORMANCE SYSTEM AAAAAAAAAAAAAAA")
 
 window_width = 1260
 window_height = 660
