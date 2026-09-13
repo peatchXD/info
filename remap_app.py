@@ -232,7 +232,7 @@ def check_or_prompt_license():
 # ----------------------------------------------------
 # 1. จัดการฐานข้อมูล (Cloud PostgreSQL หรือ Local SQLite)
 # ----------------------------------------------------
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 CLOUD_DB_URL = "postgresql://postgres.chtxisriybejpsyulxsq:peatch2524131944!@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"
 USE_CLOUD = True
 
