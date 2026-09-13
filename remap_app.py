@@ -22,6 +22,7 @@ for module_name, package_name in REQUIRED_PACKAGES.items():
     install_and_import(module_name, package_name)
 
 import datetime
+import hashlib
 import math
 import os
 import shutil
@@ -30,6 +31,203 @@ import time
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 from PIL import Image, ImageTk
+
+# ----------------------------------------------------
+# 0. ระบบ Offline License (Hardware ID / Machine Code) - ENHANCED CYBERPUNK EDITION
+# ----------------------------------------------------
+SECRET_SALT = "IwmwdWDjnWDliuUHfFubldawdDawsd"  # คีย์ลับส่วนตัวของคุณสำหรับคำนวณ Signature
+
+def get_hardware_id():
+    """ดึงค่า Hardware UUID ของเครื่องบน Windows"""
+    try:
+        cmd = "wmic csproduct get uuid"
+        output = subprocess.check_output(cmd).decode().split("\n")
+        uuid = output[1].strip() if len(output) > 1 else "DEFAULT-HARDWARE-ID"
+        if not uuid:
+            uuid = "DEFAULT-HARDWARE-ID"
+    except Exception:
+        uuid = "DEFAULT-HARDWARE-ID"
+
+    # Hash UUID ให้มีความยาวและรูปแบบมาตรฐาน
+    raw_id = hashlib.sha256(uuid.encode()).hexdigest().upper()
+    return f"{raw_id[:4]}-{raw_id[4:8]}-{raw_id[8:12]}-{raw_id[12:16]}"
+
+def generate_valid_key(hwid):
+    """สูตรคำนวณสร้าง Key จาก HWID ฝั่งระบบ"""
+    combined = f"{hwid}:{SECRET_SALT}"
+    hashed = hashlib.sha256(combined.encode()).hexdigest().upper()
+    return f"{hashed[:4]}-{hashed[4:8]}-{hashed[8:12]}-{hashed[12:16]}"
+
+def verify_license():
+    """ตรวจสอบว่าไฟล์ license.lic มีอยู่และถูกต้องกับ HWID เครื่องนี้หรือไม่"""
+    license_file = "license.lic"
+    if not os.path.exists(license_file):
+        return False
+
+    try:
+        with open(license_file, "r") as f:
+            saved_key = f.read().strip()
+
+        hwid = get_hardware_id()
+        expected_key = generate_valid_key(hwid)
+        return saved_key == expected_key
+    except Exception:
+        return False
+
+def show_license_popup():
+    """หน้าต่างป๊อปอัพยืนยันสิทธิ์ Activation สไตล์ Cyberpunk (แสดงผลก่อนเข้าโปรแกรมหลัก)"""
+    lic_root = tk.Tk()
+    lic_root.title("🔒 ECU REMAP - SECURITY ACTIVATION")
+    
+    # คำนวณตำแหน่งกึ่งกลางหน้าจอ
+    win_w, win_h = 480, 360
+    scr_w = lic_root.winfo_screenwidth()
+    scr_h = lic_root.winfo_screenheight()
+    x = int((scr_w / 2) - (win_w / 2))
+    y = int((scr_h / 2) - (win_h / 2))
+    lic_root.geometry(f"{win_w}x{win_h}+{x}+{y}")
+    lic_root.configure(bg="#030712")
+    lic_root.resizable(False, False)
+    lic_root.attributes("-topmost", True)  # แสดงผลอยู่ด้านบนสุดเสมอ
+
+    is_activated = [False]
+    hwid = get_hardware_id()
+
+    # Outer Frame / Border
+    border_frame = tk.Frame(lic_root, bg="#1e293b", highlightthickness=1, highlightbackground="#00f2fe")
+    border_frame.pack(fill="both", expand=True, padx=10, pady=10)
+    
+    main_container = tk.Frame(border_frame, bg="#030712")
+    main_container.pack(fill="both", expand=True, padx=2, pady=2)
+
+    # Title Banner
+    tk.Label(
+        main_container,
+        text="⚡ HARDWARE LICENSE ACTIVATION ⚡",
+        font=("Segoe UI", 11, "bold"),
+        fg="#00f2fe",
+        bg="#030712",
+    ).pack(pady=(18, 2))
+
+    tk.Label(
+        main_container,
+        text="⚠️ UNLICENSED MACHINE DETECTED",
+        font=("Consolas", 8, "bold"),
+        fg="#ef4444",
+        bg="#030712",
+    ).pack(pady=(0, 10))
+
+    # Machine Code Field Container
+    tk.Label(
+        main_container,
+        text="YOUR MACHINE HARDWARE ID (HWID):",
+        font=("Segoe UI", 8, "bold"),
+        fg="#94a3b8",
+        bg="#030712",
+    ).pack(anchor="w", padx=35)
+
+    hwid_frame = tk.Frame(main_container, bg="#030712")
+    hwid_frame.pack(fill="x", padx=35, pady=(2, 10))
+
+    entry_hwid = tk.Entry(
+        hwid_frame,
+        font=("Consolas", 10, "bold"),
+        justify="center",
+        bg="#020617",
+        fg="#38bdf8",
+        relief="flat",
+        highlightthickness=1,
+        highlightbackground="#1e293b",
+        highlightcolor="#00f2fe"
+    )
+    entry_hwid.insert(0, hwid)
+    entry_hwid.config(state="readonly")
+    entry_hwid.pack(side="left", fill="x", expand=True, ipady=4)
+
+    def copy_hwid():
+        lic_root.clipboard_clear()
+        lic_root.clipboard_append(hwid)
+        messagebox.showinfo("COPY SUCCESS", "คัดลอก Machine HWID เรียบร้อยแล้ว!", parent=lic_root)
+
+    btn_copy = tk.Button(
+        hwid_frame,
+        text="📋 COPY",
+        font=("Segoe UI", 8, "bold"),
+        bg="#1e293b",
+        fg="#00f2fe",
+        activebackground="#00f2fe",
+        activeforeground="#030712",
+        relief="flat",
+        cursor="hand2",
+        command=copy_hwid
+    )
+    btn_copy.pack(side="right", padx=(5, 0), ipady=2)
+
+    # License Key Field Container
+    tk.Label(
+        main_container,
+        text="ENTER ACTIVATION LICENSE KEY:",
+        font=("Segoe UI", 8, "bold"),
+        fg="#94a3b8",
+        bg="#030712",
+    ).pack(anchor="w", padx=35)
+
+    entry_key = tk.Entry(
+        main_container,
+        font=("Consolas", 10, "bold"),
+        justify="center",
+        bg="#020617",
+        fg="#facc15",
+        insertbackground="#00f2fe",
+        relief="flat",
+        highlightthickness=1,
+        highlightbackground="#1e293b",
+        highlightcolor="#00f2fe"
+    )
+    entry_key.pack(fill="x", padx=35, pady=(2, 15), ipady=4)
+    entry_key.focus_set()
+
+    def save_and_activate():
+        input_key = entry_key.get().strip()
+        expected_key = generate_valid_key(hwid)
+
+        if input_key == expected_key:
+            with open("license.lic", "w") as f:
+                f.write(input_key)
+            messagebox.showinfo(
+                "ACTIVATION SUCCESS",
+                "⚡ ถอดรหัสและเปิดใช้งานโปรแกรมเรียบร้อยแล้ว!",
+                parent=lic_root,
+            )
+            is_activated[0] = True
+            lic_root.destroy()
+        else:
+            messagebox.showerror(
+                "ACCESS DENIED",
+                "❌ License Key ไม่ถูกต้อง กรุณาติดต่อผู้ให้บริการ",
+                parent=lic_root,
+            )
+
+    ModernRoundedButton(
+        main_container,
+        text="⚡ ACTIVATE SYSTEM",
+        bg="#0284c7",
+        hover_bg="#38bdf8",
+        fg="white",
+        command=save_and_activate,
+        width=200,
+        height=34,
+        radius=8,
+    ).pack(pady=5)
+
+    lic_root.mainloop()
+    return is_activated[0]
+
+def check_or_prompt_license():
+    """ตรวจสอบสิทธิ์ หากยังไม่ถูกเปิดใช้งานจะแสดง Pop-Up Activate ก่อน"""
+    if verify_license():
+        return True
+    return show_license_popup()
 
 # ----------------------------------------------------
 # 1. จัดการฐานข้อมูล (Cloud PostgreSQL หรือ Local SQLite)
@@ -617,7 +815,71 @@ THEMES = {
 current_theme = THEMES["Cyberpunk (ฟ้า-เข้ม)"].copy()
 
 # ----------------------------------------------------
-# 4. ฟังก์ชันการทำงานของ GUI
+# 4. ตรวจสอบสิทธิ์ LICENSE ก่อนสร้างแอปหลัก (Pre-Execution Guard)
+# ----------------------------------------------------
+if not check_or_prompt_license():
+    sys.exit(0)
+
+# ----------------------------------------------------
+# 5. หน้าโหลดโปรแกรมรายละเอียด (Splash Screen with % Progress Bar)
+# ----------------------------------------------------
+splash = tk.Tk()
+splash.overrideredirect(True)
+splash_w, splash_h = 500, 280
+s_scr_w = splash.winfo_screenwidth()
+s_scr_h = splash.winfo_screenheight()
+splash_x = int((s_scr_w / 2) - (splash_w / 2))
+splash_y = int((s_scr_h / 2) - (splash_h / 2))
+splash.geometry(f"{splash_w}x{splash_h}+{splash_x}+{splash_y}")
+splash.configure(bg="#030712")
+
+canvas_splash = tk.Canvas(splash, bg="#030712", highlightthickness=0)
+canvas_splash.pack(fill="both", expand=True)
+
+# กรอบเรืองแสง
+canvas_splash.create_rectangle(5, 5, splash_w - 5, splash_h - 5, outline="#1e293b", width=2)
+canvas_splash.create_text(
+    splash_w / 2, 60, text="⚡ ECU REMAP PERFORMANCE", fill="#00f2fe", font=("Segoe UI", 16, "bold")
+)
+canvas_splash.create_text(
+    splash_w / 2, 90, text="INITIALIZING SYSTEM DATA CENTER...", fill="#64748b", font=("Consolas", 9, "bold")
+)
+
+lbl_splash_status = tk.Label(splash, text="กำลังเตรียมความพร้อมของระบบ...", fg="#38bdf8", bg="#030712", font=("Segoe UI", 9))
+lbl_splash_status.place(x=50, y=145)
+
+lbl_splash_percent = tk.Label(splash, text="0%", fg="#00f2fe", bg="#030712", font=("Consolas", 11, "bold"))
+lbl_splash_percent.place(x= splash_w - 90, y=145)
+
+# Progress bar container
+canvas_splash.create_rectangle(50, 175, splash_w - 50, 190, outline="#1e293b", fill="#020617", width=1.5)
+progress_bar = canvas_splash.create_rectangle(52, 177, 52, 188, fill="#00f2fe", outline="")
+
+loading_steps = [
+    (15, "กำลังตรวจสอบและยืนยันสิทธิ์ License HWID..."),
+    (35, "กำลังตรวจสอบและสร้างตารางฐานข้อมูล..."),
+    (65, "กำลังทดสอบการเชื่อมต่อฐานข้อมูล (Supabase Cloud)..."),
+    (85, "กำลังโหลดการตั้งค่า UI และระบบธีมสี Cyberpunk..."),
+    (100, "ระบบพร้อมใช้งานแล้ว! กำลังเข้าสู่โปรแกรมหลัก..."),
+]
+
+for p, status in loading_steps:
+    lbl_splash_status.config(text=status)
+    lbl_splash_percent.config(text=f"{p}%")
+    
+    start_x = 52
+    target_x = 52 + int(((splash_w - 104) * p) / 100)
+    canvas_splash.coords(progress_bar, start_x, 177, target_x, 188)
+    splash.update()
+    
+    if p == 35:
+        init_db()
+    time.sleep(0.35)
+
+splash.destroy()
+
+# ----------------------------------------------------
+# 6. ฟังก์ชันการทำงานของ GUI หลัก
 # ----------------------------------------------------
 selected_bin_path = None
 selected_xdf_path = None
@@ -1029,7 +1291,7 @@ def on_search(event=None):
 
 
 # ----------------------------------------------------
-# 5. ฟังก์ชันตั้งค่าสี และ โลโก้ (Settings Modal)
+# 7. ฟังก์ชันตั้งค่าสี และ โลโก้ (Settings Modal)
 # ----------------------------------------------------
 lbl_img_global = None
 
@@ -1268,65 +1530,7 @@ def open_settings_window():
 
 
 # ----------------------------------------------------
-# 5.5 หน้าโหลดโปรแกรมละเอียด (Splash Screen with % Progress Bar)
-# ----------------------------------------------------
-splash = tk.Tk()
-splash.overrideredirect(True)
-splash_w, splash_h = 500, 280
-s_scr_w = splash.winfo_screenwidth()
-s_scr_h = splash.winfo_screenheight()
-splash_x = int((s_scr_w / 2) - (splash_w / 2))
-splash_y = int((s_scr_h / 2) - (splash_h / 2))
-splash.geometry(f"{splash_w}x{splash_h}+{splash_x}+{splash_y}")
-splash.configure(bg="#030712")
-
-canvas_splash = tk.Canvas(splash, bg="#030712", highlightthickness=0)
-canvas_splash.pack(fill="both", expand=True)
-
-# กรอบเรืองแสง
-canvas_splash.create_rectangle(5, 5, splash_w - 5, splash_h - 5, outline="#1e293b", width=2)
-canvas_splash.create_text(
-    splash_w / 2, 60, text="⚡ ECU REMAP PERFORMANCE", fill="#00f2fe", font=("Segoe UI", 16, "bold")
-)
-canvas_splash.create_text(
-    splash_w / 2, 90, text="INITIALIZING SYSTEM DATA CENTER...", fill="#64748b", font=("Consolas", 9, "bold")
-)
-
-lbl_splash_status = tk.Label(splash, text="กำลังเตรียมความพร้อมของระบบ...", fg="#38bdf8", bg="#030712", font=("Segoe UI", 9))
-lbl_splash_status.place(x=50, y=145)
-
-lbl_splash_percent = tk.Label(splash, text="0%", fg="#00f2fe", bg="#030712", font=("Consolas", 11, "bold"))
-lbl_splash_percent.place(x= splash_w - 90, y=145)
-
-# Progress bar container
-canvas_splash.create_rectangle(50, 175, splash_w - 50, 190, outline="#1e293b", fill="#020617", width=1.5)
-progress_bar = canvas_splash.create_rectangle(52, 177, 52, 188, fill="#00f2fe", outline="")
-
-loading_steps = [
-    (15, "กำลังโหลดและตรวจสอบ Package อัตโนมัติ..."),
-    (35, "กำลังตรวจสอบและสร้างตารางฐานข้อมูล..."),
-    (65, "กำลังทดสอบการเชื่อมต่อฐานข้อมูล (Supabase Cloud)..."),
-    (85, "กำลังโหลดการตั้งค่า UI และระบบธีมสี Cyberpunk..."),
-    (100, "ระบบพร้อมใช้งานแล้ว! กำลังเข้าสู่โปรแกรมหลัก..."),
-]
-
-for p, status in loading_steps:
-    lbl_splash_status.config(text=status)
-    lbl_splash_percent.config(text=f"{p}%")
-    
-    start_x = 52
-    target_x = 52 + int(((splash_w - 104) * p) / 100)
-    canvas_splash.coords(progress_bar, start_x, 177, target_x, 188)
-    splash.update()
-    
-    if p == 35:
-        init_db()
-    time.sleep(0.35)
-
-splash.destroy()
-
-# ----------------------------------------------------
-# 6. หน้าตาโปรแกรมหลัก (Cyberpunk Rounded Edition)
+# 8. หน้าตาโปรแกรมหลัก (Cyberpunk Main Window Interface)
 # ----------------------------------------------------
 root = tk.Tk()
 root.title("🏎️ ECU REMAP TUNING PERFORMANCE SYSTEM")
@@ -1603,7 +1807,7 @@ btn_attach_bin = ModernRoundedButton(
     height=22,
     radius=6,
 )
-btn_attach_bin.grid(row=3, column=3, sticky="e", padx=3) # จัดวางด้านซ้ายปุ่มแนบ XDF
+btn_attach_bin.grid(row=3, column=3, sticky="e", padx=3)
 
 tk.Label(frame_form, text="ไฟล์ XDF แนบ:", **label_options).grid(
     row=3, column=4, sticky="e", pady=2, padx=2
