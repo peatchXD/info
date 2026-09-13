@@ -60,8 +60,9 @@ from supabase import create_client, Client
 # ----------------------------------------------------
 # 0. CONFIG & SUPABASE ONLINE LICENSE VERIFICATION
 # ----------------------------------------------------
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 CONFIG_FILE = "config.json"
+CURRENT_LICENSE_KEY = ""  # ตัวแปรเก็บ License Key ที่ใช้งานอยู่ปัจจุบัน
 
 # Supabase Credentials (ใช้ Publishable key สำหรับฝั่ง Client)
 SUPABASE_URL = "https://chtxisriybejpsyulxsq.supabase.co"
@@ -102,6 +103,7 @@ def verify_online_license_key(user_key):
 
 def verify_saved_license():
     """ตรวจเช็กไฟล์ license.lic ในเครื่องเดิม"""
+    global CURRENT_LICENSE_KEY
     license_file = "license.lic"
     if not os.path.exists(license_file):
         return False
@@ -111,12 +113,15 @@ def verify_saved_license():
             saved_key = f.read().strip()
         
         is_valid, _ = verify_online_license_key(saved_key)
+        if is_valid:
+            CURRENT_LICENSE_KEY = saved_key
         return is_valid
     except Exception:
         return False
 
 def show_license_popup():
     """หน้าต่างป๊อปอัพให้ลูกค้ากรอก Key เพื่อ Activate"""
+    global CURRENT_LICENSE_KEY
     lic_root = tk.Tk()
     lic_root.title("🔒 ECU REMAP - ONLINE LICENSE ACTIVATION")
     
@@ -178,6 +183,7 @@ def show_license_popup():
     entry_key.focus_set()
 
     def save_and_activate():
+        global CURRENT_LICENSE_KEY
         input_key = entry_key.get().strip()
         if not input_key:
             messagebox.showwarning("WARNING", "กรุณากรอก License Key", parent=lic_root)
@@ -188,6 +194,7 @@ def show_license_popup():
         if success:
             with open("license.lic", "w") as f:
                 f.write(input_key)
+            CURRENT_LICENSE_KEY = input_key
             messagebox.showinfo("ACTIVATION SUCCESS", msg, parent=lic_root)
             is_activated[0] = True
             lic_root.destroy()
@@ -262,11 +269,18 @@ def init_db():
         cursor.execute(f"""
             CREATE TABLE IF NOT EXISTS customers (
                 {pk_stmt},
+                license_key TEXT,
                 date TEXT, customer_name TEXT, phone TEXT, car_brand TEXT, car_model TEXT, engine_spec TEXT,
                 plate_number TEXT, ecu_type TEXT, remap_stage TEXT, price REAL, note TEXT,
                 bin_filename TEXT, bin_data {blob_type}, xdf_filename TEXT, xdf_data {blob_type}
             )
         """)
+
+        try:
+            cursor.execute("ALTER TABLE customers ADD COLUMN license_key TEXT;")
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
         try:
             cursor.execute("ALTER TABLE customers ADD COLUMN engine_spec TEXT;")
@@ -302,10 +316,10 @@ def insert_data(date, name, phone, brand, model, engine_spec, plate, ecu, stage,
         if xdf_data: xdf_data = psycopg2.Binary(xdf_data)
 
     query = f"""
-        INSERT INTO customers (date, customer_name, phone, car_brand, car_model, engine_spec, plate_number, ecu_type, remap_stage, price, note, bin_filename, bin_data, xdf_filename, xdf_data)
-        VALUES ({param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param})
+        INSERT INTO customers (license_key, date, customer_name, phone, car_brand, car_model, engine_spec, plate_number, ecu_type, remap_stage, price, note, bin_filename, bin_data, xdf_filename, xdf_data)
+        VALUES ({param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param}, {param})
     """
-    cursor.execute(query, (date, name, phone, brand, model, engine_spec, plate, ecu, stage, price, note, bin_filename, bin_data, xdf_filename, xdf_data))
+    cursor.execute(query, (CURRENT_LICENSE_KEY, date, name, phone, brand, model, engine_spec, plate, ecu, stage, price, note, bin_filename, bin_data, xdf_filename, xdf_data))
     conn.commit()
     conn.close()
 
@@ -338,8 +352,8 @@ def update_data(customer_id, date, name, phone, brand, model, engine_spec, plate
             xdf_data = psycopg2.Binary(xdf_data)
         values.extend([xdf_filename, xdf_data])
 
-    values.append(customer_id)
-    query = f"UPDATE customers SET {', '.join(fields)} WHERE id = {param}"
+    values.extend([customer_id, CURRENT_LICENSE_KEY])
+    query = f"UPDATE customers SET {', '.join(fields)} WHERE id = {param} AND license_key = {param}"
     cursor.execute(query, tuple(values))
     conn.commit()
     conn.close()
@@ -348,26 +362,21 @@ def delete_data(customer_id):
     conn = get_connection()
     cursor = conn.cursor()
     param = "%s" if USE_CLOUD else "?"
-    cursor.execute(f"DELETE FROM customers WHERE id = {param}", (customer_id,))
+    cursor.execute(f"DELETE FROM customers WHERE id = {param} AND license_key = {param}", (customer_id, CURRENT_LICENSE_KEY))
     conn.commit()
     conn.close()
 
 def clear_all_database_records():
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM customers")
+    param = "%s" if USE_CLOUD else "?"
+    cursor.execute(f"DELETE FROM customers WHERE license_key = {param}", (CURRENT_LICENSE_KEY,))
     conn.commit()
     conn.close()
 
 def reset_database_id_sequence():
-    conn = get_connection()
-    cursor = conn.cursor()
-    if USE_CLOUD:
-        cursor.execute("ALTER SEQUENCE customers_id_seq RESTART WITH 1")
-    else:
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name='customers'")
-    conn.commit()
-    conn.close()
+    # หมายเหตุ: Sequence ของ Cloud จะเป็นยอดรวม Global แต่อยู่ใต้เงื่อนไข Filter แยกข้อมูลแต่ละ Key อยู่แล้ว
+    pass
 
 def fetch_all_data(query_str=""):
     conn = get_connection()
@@ -379,16 +388,16 @@ def fetch_all_data(query_str=""):
         query = f"""
             SELECT id, date, customer_name, phone, car_brand, car_model, engine_spec, plate_number, ecu_type, remap_stage, price, note, bin_filename, xdf_filename 
             FROM customers 
-            WHERE customer_name LIKE {param} OR phone LIKE {param} OR plate_number LIKE {param} OR car_brand LIKE {param} OR engine_spec LIKE {param} OR ecu_type LIKE {param} OR bin_filename LIKE {param} OR xdf_filename LIKE {param}
+            WHERE license_key = {param} AND (customer_name LIKE {param} OR phone LIKE {param} OR plate_number LIKE {param} OR car_brand LIKE {param} OR engine_spec LIKE {param} OR ecu_type LIKE {param} OR bin_filename LIKE {param} OR xdf_filename LIKE {param})
             ORDER BY id DESC
         """
-        cursor.execute(query, (q, q, q, q, q, q, q, q))
+        cursor.execute(query, (CURRENT_LICENSE_KEY, q, q, q, q, q, q, q, q))
     else:
-        query = """
+        query = f"""
             SELECT id, date, customer_name, phone, car_brand, car_model, engine_spec, plate_number, ecu_type, remap_stage, price, note, bin_filename, xdf_filename 
-            FROM customers ORDER BY id DESC
+            FROM customers WHERE license_key = {param} ORDER BY id DESC
         """
-        cursor.execute(query)
+        cursor.execute(query, (CURRENT_LICENSE_KEY,))
     rows = cursor.fetchall()
     conn.close()
     return rows
@@ -397,7 +406,7 @@ def fetch_bin_file(customer_id):
     conn = get_connection()
     cursor = conn.cursor()
     param = "%s" if USE_CLOUD else "?"
-    cursor.execute(f"SELECT bin_filename, bin_data FROM customers WHERE id = {param}", (customer_id,))
+    cursor.execute(f"SELECT bin_filename, bin_data FROM customers WHERE id = {param} AND license_key = {param}", (customer_id, CURRENT_LICENSE_KEY))
     row = cursor.fetchone()
     conn.close()
     return row
@@ -406,7 +415,7 @@ def fetch_xdf_file(customer_id):
     conn = get_connection()
     cursor = conn.cursor()
     param = "%s" if USE_CLOUD else "?"
-    cursor.execute(f"SELECT xdf_filename, xdf_data FROM customers WHERE id = {param}", (customer_id,))
+    cursor.execute(f"SELECT xdf_filename, xdf_data FROM customers WHERE id = {param} AND license_key = {param}", (customer_id, CURRENT_LICENSE_KEY))
     row = cursor.fetchone()
     conn.close()
     return row
@@ -445,44 +454,24 @@ class RoundedCanvasCard(tk.Canvas):
         r = self.radius
 
         self.create_arc(
-            0,
-            0,
-            2 * r,
-            2 * r,
-            start=90,
-            extent=90,
-            fill=self.bg_color,
-            outline=self.bg_color,
+            0, 0, 2 * r, 2 * r,
+            start=90, extent=90,
+            fill=self.bg_color, outline=self.bg_color,
         )
         self.create_arc(
-            w - 2 * r,
-            0,
-            w,
-            2 * r,
-            start=0,
-            extent=90,
-            fill=self.bg_color,
-            outline=self.bg_color,
+            w - 2 * r, 0, w, 2 * r,
+            start=0, extent=90,
+            fill=self.bg_color, outline=self.bg_color,
         )
         self.create_arc(
-            w - 2 * r,
-            h - 2 * r,
-            w,
-            h,
-            start=270,
-            extent=90,
-            fill=self.bg_color,
-            outline=self.bg_color,
+            w - 2 * r, h - 2 * r, w, h,
+            start=270, extent=90,
+            fill=self.bg_color, outline=self.bg_color,
         )
         self.create_arc(
-            0,
-            h - 2 * r,
-            2 * r,
-            h,
-            start=180,
-            extent=90,
-            fill=self.bg_color,
-            outline=self.bg_color,
+            0, h - 2 * r, 2 * r, h,
+            start=180, extent=90,
+            fill=self.bg_color, outline=self.bg_color,
         )
 
         self.create_rectangle(
@@ -494,48 +483,24 @@ class RoundedCanvasCard(tk.Canvas):
 
         # Border Lines
         self.create_arc(
-            0,
-            0,
-            2 * r,
-            2 * r,
-            start=90,
-            extent=90,
-            style=tk.ARC,
-            outline=self.border_color,
-            width=1.5,
+            0, 0, 2 * r, 2 * r,
+            start=90, extent=90,
+            style=tk.ARC, outline=self.border_color, width=1.5,
         )
         self.create_arc(
-            w - 2 * r,
-            0,
-            w,
-            2 * r,
-            start=0,
-            extent=90,
-            style=tk.ARC,
-            outline=self.border_color,
-            width=1.5,
+            w - 2 * r, 0, w, 2 * r,
+            start=0, extent=90,
+            style=tk.ARC, outline=self.border_color, width=1.5,
         )
         self.create_arc(
-            w - 2 * r,
-            h - 2 * r,
-            w,
-            h,
-            start=270,
-            extent=90,
-            style=tk.ARC,
-            outline=self.border_color,
-            width=1.5,
+            w - 2 * r, h - 2 * r, w, h,
+            start=270, extent=90,
+            style=tk.ARC, outline=self.border_color, width=1.5,
         )
         self.create_arc(
-            0,
-            h - 2 * r,
-            2 * r,
-            h,
-            start=180,
-            extent=90,
-            style=tk.ARC,
-            outline=self.border_color,
-            width=1.5,
+            0, h - 2 * r, 2 * r, h,
+            start=180, extent=90,
+            style=tk.ARC, outline=self.border_color, width=1.5,
         )
 
         self.create_line(
@@ -607,44 +572,24 @@ class ModernRoundedButton(tk.Canvas):
         r = self.radius
 
         self.create_arc(
-            0,
-            0,
-            2 * r,
-            2 * r,
-            start=90,
-            extent=90,
-            fill=self.current_bg,
-            outline=self.current_bg,
+            0, 0, 2 * r, 2 * r,
+            start=90, extent=90,
+            fill=self.current_bg, outline=self.current_bg,
         )
         self.create_arc(
-            w - 2 * r,
-            0,
-            w,
-            2 * r,
-            start=0,
-            extent=90,
-            fill=self.current_bg,
-            outline=self.current_bg,
+            w - 2 * r, 0, w, 2 * r,
+            start=0, extent=90,
+            fill=self.current_bg, outline=self.current_bg,
         )
         self.create_arc(
-            w - 2 * r,
-            h - 2 * r,
-            w,
-            h,
-            start=270,
-            extent=90,
-            fill=self.current_bg,
-            outline=self.current_bg,
+            w - 2 * r, h - 2 * r, w, h,
+            start=270, extent=90,
+            fill=self.current_bg, outline=self.current_bg,
         )
         self.create_arc(
-            0,
-            h - 2 * r,
-            2 * r,
-            h,
-            start=180,
-            extent=90,
-            fill=self.current_bg,
-            outline=self.current_bg,
+            0, h - 2 * r, 2 * r, h,
+            start=180, extent=90,
+            fill=self.current_bg, outline=self.current_bg,
         )
 
         self.create_rectangle(
@@ -655,8 +600,7 @@ class ModernRoundedButton(tk.Canvas):
         )
 
         self.create_text(
-            w / 2,
-            h / 2,
+            w / 2, h / 2,
             text=self.text,
             fill=self.fg_color,
             font=self.font,
@@ -1013,35 +957,20 @@ def delete_selected_customer():
 
 def reset_database_id():
     """ฟังก์ชันสำหรับกดปุ่ม Reset ID ลำดับรายการใหม่"""
-    confirm = messagebox.askyesno(
-        "CONFIRM RESET ID",
-        "คุณต้องการ Reset Sequence ของ ID กลับไปเริ่มที่ 1 ใช่หรือไม่?",
-        icon="warning",
-    )
-    if confirm:
-        try:
-            reset_database_id_sequence()
-            messagebox.showinfo("SUCCESS", "รีเซ็ต ID เรียบร้อยแล้ว")
-            load_table_data()
-        except Exception as e:
-            messagebox.showerror("Error", f"ไม่สามารถรีเซ็ต ID ได้:\n{e}")
+    messagebox.showinfo("INFO", "ระบบ Cloud จะเรียงลำดับ ID ของ Key คุณให้อัตโนมัติ")
 
 
 def clear_all_data():
-    """ฟังก์ชันสำหรับกดปุ่มล้างข้อมูลทั้งหมด"""
+    """ฟังก์ชันสำหรับกดปุ่มล้างข้อมูลทั้งหมดเฉพาะของ Key ตัวเอง"""
     confirm = messagebox.askyesno(
         "DANGER: CLEAR ALL DATA",
-        "⚠️ คุณแน่ใจหรือไม่ที่จะลบข้อมูลประวัติลูกค้าทั้งหมดในฐานข้อมูล?\n\nการกระทำนี้ไม่สามารถย้อนกลับได้!",
+        "⚠️ คุณแน่ใจหรือไม่ที่จะลบข้อมูลประวัติลูกค้าทั้งหมดของคุณ?\n\nการกระทำนี้ไม่สามารถย้อนกลับได้!",
         icon="error",
     )
     if confirm:
         try:
             clear_all_database_records()
-            try:
-                reset_database_id_sequence()
-            except Exception:
-                pass
-            messagebox.showinfo("SUCCESS", "ล้างข้อมูลทั้งหมดในฐานข้อมูลเรียบร้อยแล้ว")
+            messagebox.showinfo("SUCCESS", "ล้างข้อมูลทั้งหมดของคุณเรียบร้อยแล้ว")
             clear_fields()
             load_table_data()
         except Exception as e:
@@ -1095,7 +1024,6 @@ def on_tree_double_click(event):
     entry_xdf_file.insert(0, xdf_name)
     entry_xdf_file.config(state="readonly")
 
-    # เปลี่ยนชื่อหัวข้อฟอร์มและปุ่มบันทึกเพื่อแสดงสถานะแก้ไข
     form_title_lbl.config(text=f"✏️ แก้ไขข้อมูลลูกค้า (ID: {current_selected_id})")
     btn_save.set_text("💾 บันทึกแก้ไข")
 
@@ -1139,7 +1067,7 @@ def toggle_pulse_status():
     pulse_state = not pulse_state
     if USE_CLOUD and is_connected_cloud:
         color = "#10b981" if pulse_state else "#059669"
-        lbl_status.config(text="🟢 ONLINE (CLOUD)", fg=color)
+        lbl_status.config(text=f"🟢 ONLINE [KEY: {CURRENT_LICENSE_KEY[:6]}...]", fg=color)
     else:
         color = "#f43f5e" if pulse_state else "#9f1239"
         lbl_status.config(text="🔴 OFFLINE (LOCAL)", fg=color)
@@ -1207,7 +1135,6 @@ def upload_logo():
 
 
 def reset_logo():
-    """ฟังก์ชันคืนค่าโลโก้เดิม (แอนิเมชันเข็มไมล์มาตรฐาน)"""
     confirm = messagebox.askyesno(
         "ยืนยัน", "คุณต้องการคืนค่าโลโก้เดิม (แอนิเมชันเข็มไมล์) หรือไม่?"
     )
@@ -1223,7 +1150,6 @@ def reset_logo():
 
 
 def reset_theme():
-    """ฟังก์ชันคืนค่าสีเดิม (Cyberpunk Standard Theme)"""
     global current_theme
     current_theme = THEMES["Cyberpunk (ฟ้า-เข้ม)"].copy()
     apply_theme()
@@ -1267,7 +1193,6 @@ def apply_theme():
     form_title_lbl.config(fg=cyan, bg=bg_c)
     table_title_lbl.config(fg=cyan, bg=bg_c)
 
-    # Style Treeview
     style.configure(
         "Treeview",
         background=entry_bg,
@@ -1295,7 +1220,6 @@ def open_settings_window():
         bg=current_theme["CARD_BG"],
     ).pack(pady=10)
 
-    # Zone Preset Theme
     frame_theme = tk.Frame(win, bg=current_theme["CARD_BG"])
     frame_theme.pack(fill="x", padx=20, pady=5)
 
@@ -1319,7 +1243,6 @@ def open_settings_window():
         "<<ComboboxSelected>>", lambda e: change_theme_event(combo_theme.get())
     )
 
-    # Zone Custom Colors
     frame_custom = tk.Frame(win, bg=current_theme["CARD_BG"])
     frame_custom.pack(fill="x", padx=20, pady=8)
 
@@ -1367,7 +1290,6 @@ def open_settings_window():
         height=26,
     ).pack(side="left", padx=2)
 
-    # ปุ่มคืนค่าสีเดิม
     frame_reset_color = tk.Frame(win, bg=current_theme["CARD_BG"])
     frame_reset_color.pack(fill="x", padx=20, pady=(2, 8))
 
@@ -1382,7 +1304,6 @@ def open_settings_window():
         height=26,
     ).pack(fill="x")
 
-    # Zone Logo
     frame_logo = tk.Frame(win, bg=current_theme["CARD_BG"])
     frame_logo.pack(fill="x", padx=20, pady=8)
 
@@ -1397,7 +1318,7 @@ def open_settings_window():
     logo_btn_box = tk.Frame(frame_logo, bg=current_theme["CARD_BG"])
     logo_btn_box.pack(fill="x")
 
-    btn_up = ModernRoundedButton(
+    ModernRoundedButton(
         logo_btn_box,
         text="📂 เปลี่ยนโลโก้",
         bg="#059669",
@@ -1406,10 +1327,9 @@ def open_settings_window():
         command=lambda: [upload_logo(), win.destroy()],
         width=165,
         height=35,
-    )
-    btn_up.pack(side="left", padx=(0, 5))
+    ).pack(side="left", padx=(0, 5))
 
-    btn_del = ModernRoundedButton(
+    ModernRoundedButton(
         logo_btn_box,
         text="🔄 คืนค่าโลโก้เดิม",
         bg="#dc2626",
@@ -1418,8 +1338,7 @@ def open_settings_window():
         command=lambda: [reset_logo(), win.destroy()],
         width=165,
         height=35,
-    )
-    btn_del.pack(side="left")
+    ).pack(side="left")
 
 
 # ----------------------------------------------------
@@ -1438,7 +1357,6 @@ root.geometry(f"{window_width}x{window_height}+{center_x}+{center_y}")
 
 root.configure(bg=current_theme["BG_MAIN"])
 
-# Treeview Style
 style = ttk.Style()
 style.theme_use("clam")
 
@@ -1462,7 +1380,6 @@ style.map("Treeview", background=[("selected", "#0284c7")])
 
 # ----------------- UI Layout -----------------
 
-# 1. Header Bar
 header_frame = tk.Frame(root, bg="#020617", height=50)
 header_frame.pack(fill="x")
 
@@ -1484,7 +1401,6 @@ lbl_status = tk.Label(
 )
 lbl_status.pack(side="left", padx=10, pady=8)
 
-# ปุ่มตั้งค่าด้านบนขวา
 btn_settings = ModernRoundedButton(
     header_frame,
     text="⚙️ ตั้งค่าระบบ",
@@ -1498,7 +1414,6 @@ btn_settings = ModernRoundedButton(
 )
 btn_settings.pack(side="right", padx=15, pady=8)
 
-# KPI Cards ขอบมนบน Header
 kpi_frame = tk.Frame(header_frame, bg="#020617")
 kpi_frame.pack(side="right", padx=10, pady=4)
 
@@ -1556,11 +1471,9 @@ lbl_kpi_revenue = tk.Label(
 )
 lbl_kpi_revenue.place(relx=0.5, rely=0.70, anchor="center")
 
-# 2. Main Middle Container
 middle_container = tk.Frame(root, bg=current_theme["BG_MAIN"])
 middle_container.pack(fill="x", padx=12, pady=6)
 
-# 2.1 Left Form Canvas Card
 card_form_bg = RoundedCanvasCard(
     middle_container,
     bg_color=current_theme["CARD_BG"],
@@ -1739,7 +1652,6 @@ text_note = tk.Text(
 )
 text_note.grid(row=4, column=1, columnspan=5, sticky="ew", pady=2)
 
-# Control Buttons - Row 5
 btn_frame = tk.Frame(frame_form, bg=current_theme["CARD_BG"])
 btn_frame.grid(row=5, column=0, columnspan=6, sticky="e", pady=(4, 0))
 
@@ -1782,7 +1694,6 @@ btn_save = ModernRoundedButton(
 )
 btn_save.pack(side="left", padx=3)
 
-# 2.2 Right LOGO Banner Card
 card_logo_bg = RoundedCanvasCard(
     middle_container,
     bg_color=current_theme["CARD_BG"],
@@ -1813,23 +1724,12 @@ def animate_speedometer(canvas):
     ny = cy + r * math.sin(angle)
 
     canvas.create_line(
-        cx,
-        cy,
-        nx,
-        ny,
-        fill="#f43f5e",
-        width=3,
-        tags="gauge_needle",
-        capstyle=tk.ROUND,
+        cx, cy, nx, ny,
+        fill="#f43f5e", width=3, tags="gauge_needle", capstyle=tk.ROUND,
     )
     canvas.create_oval(
-        cx - 5,
-        cy - 5,
-        cx + 5,
-        cy + 5,
-        fill=current_theme["ACCENT_CYAN"],
-        outline="",
-        tags="gauge_needle",
+        cx - 5, cy - 5, cx + 5, cy + 5,
+        fill=current_theme["ACCENT_CYAN"], outline="", tags="gauge_needle",
     )
 
     anim_timer = root.after(50, lambda: animate_speedometer(canvas))
@@ -1876,38 +1776,22 @@ def load_garage_logo():
         banner_canvas.create_line(0, j, 290, j, fill="#0f172a", width=1)
 
     banner_canvas.create_arc(
-        145 - 55,
-        80 - 55,
-        145 + 55,
-        80 + 55,
-        start=-45,
-        extent=270,
-        style=tk.ARC,
-        outline="#1e293b",
-        width=6,
+        145 - 55, 80 - 55, 145 + 55, 80 + 55,
+        start=-45, extent=270, style=tk.ARC, outline="#1e293b", width=6,
     )
     banner_canvas.create_arc(
-        145 - 55,
-        80 - 55,
-        145 + 55,
-        80 + 55,
-        start=30,
-        extent=180,
-        style=tk.ARC,
-        outline=current_theme["ACCENT_CYAN"],
-        width=6,
+        145 - 55, 80 - 55, 145 + 55, 80 + 55,
+        start=30, extent=180, style=tk.ARC, outline=current_theme["ACCENT_CYAN"], width=6,
     )
 
     banner_canvas.create_text(
-        145,
-        142,
+        145, 142,
         text="🏎️ TUNING SHOP",
         fill=current_theme["ACCENT_CYAN"],
         font=("Segoe UI", 11, "bold"),
     )
     banner_canvas.create_text(
-        145,
-        162,
+        145, 162,
         text="ECU REMAP DATA CENTER",
         fill="#64748b",
         font=("Consolas", 7, "bold"),
@@ -1918,7 +1802,6 @@ def load_garage_logo():
 
 load_garage_logo()
 
-# 3. Table Canvas Card
 card_table_bg = RoundedCanvasCard(
     root,
     bg_color=current_theme["CARD_BG"],
@@ -1946,7 +1829,6 @@ entry_search = tk.Entry(search_frame, width=22, **entry_options)
 entry_search.pack(side="left", padx=4)
 entry_search.bind("<KeyRelease>", on_search)
 
-# ปุ่มสั่งการด้านขวาตาราง
 btn_clear_all = ModernRoundedButton(
     search_frame,
     text="💥 ล้างข้อมูลทั้งหมด",
@@ -2012,7 +1894,6 @@ btn_download_xdf = ModernRoundedButton(
 )
 btn_download_xdf.pack(side="right", padx=(3, 0))
 
-# Table Container
 table_container = tk.Frame(card_table_bg, bg=current_theme["CARD_BG"])
 table_container.place(x=15, y=60, relwidth=0.97, relheight=0.78)
 
@@ -2073,7 +1954,6 @@ tree.configure(yscrollcommand=scrollbar.set)
 scrollbar.pack(side="right", fill="y")
 tree.pack(fill="both", expand=True)
 
-# เริ่มต้นระบบ
 load_table_data()
 toggle_pulse_status()
 
